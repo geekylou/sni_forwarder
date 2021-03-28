@@ -1,0 +1,6 @@
+# Bind address that the proxy will bind to.
+host: "[::]:443"
+hosts:
+ host-1.com: 1.2.3.4 # Mapping from host to IP-address or real hostname that the host is actually hosted on.
+ host-2.com: "realhost-ipv6.com"
+ 

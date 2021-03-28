@@ -4,9 +4,6 @@ extern crate yaml_rust;
 use 
 {
     std::io::Cursor,
-    std::io::Read,
-    std::io::Write,
-    std::io::Error,
     byteorder::ReadBytesExt,
     byteorder::BigEndian,
     tokio::net::TcpListener,
@@ -35,10 +32,9 @@ pub async fn main()
         let stream = listener.accept().await;
 
         match stream {
-            Ok(mut stream) => {
+            Ok(stream) => {
                 //let mut stream = stream;
                 println!("new client!");
-                let mut is_data = true;
 
                 let y= hosts_map_arc.clone();                
                 tokio::spawn(async move {
@@ -53,7 +49,7 @@ pub async fn main()
                     }
                 });
             }
-            Err(e) => { /* connection failed */ }
+            Err(e) => { println!("Error: Socket accept failed {}",e);}
         }
     }   
 }
@@ -62,7 +58,7 @@ async fn handle_record_packet(hosts_map: Arc<HashMap<String,String>>, mut stream
 {
     use byteorder::WriteBytesExt;
     let mut buffer = [0;5];
-    let n = stream.read(&mut buffer).await?;
+    let _n = stream.read(&mut buffer).await?;
 
     let mut record_output = RecordOutput {dns_hostname:&mut String::new(),content_type:0,protocol_version:0};
 
@@ -145,8 +141,8 @@ async fn forward(stream_in:&mut tokio::io::ReadHalf<Box<TcpStream>>,stream_out:&
 
         let mut rdr = Cursor::new(buffer_in_client);
         
-        let x = ReadBytesExt::read_u8(&mut rdr)?; // Skip record type.
-        let y = ReadBytesExt::read_u16::<BigEndian>(&mut rdr)?; // Skip protocol version.
+        let _x = ReadBytesExt::read_u8(&mut rdr)?; // Skip record type.  We need to call this to advance the file pointer.
+        let _y = ReadBytesExt::read_u16::<BigEndian>(&mut rdr)?; // Skip protocol version.
         //print!("rt {:x?} ",x); // Skip record type.
         //print!("pt {:x?} ",y); // Skip protocol version.
         
@@ -164,14 +160,10 @@ async fn forward(stream_in:&mut tokio::io::ReadHalf<Box<TcpStream>>,stream_out:&
 
 fn handle_client_hello(record_output :&mut RecordOutput,buffer: &[u8])
 {
-    use byteorder::ReadBytesExt;
-    use byteorder::BigEndian;
-    use pretty_hex::*;
-  
     let mut rdr = Cursor::new(buffer);
     let mut random = [0;32];
 
-    let protocol_version = ReadBytesExt::read_u16::<BigEndian>(&mut rdr).unwrap();
+    let _protocol_version = ReadBytesExt::read_u16::<BigEndian>(&mut rdr).unwrap();
     std::io::Read::read(&mut rdr,&mut random).unwrap();
 
     let legacy_session_id_length = ReadBytesExt::read_u8(&mut rdr).unwrap();
@@ -242,12 +234,10 @@ fn handle_client_hello(record_output :&mut RecordOutput,buffer: &[u8])
 fn handle_config() -> Result<(HashMap<String,String>,String),std::io::Error>
 {
     use yaml_rust::YamlLoader;
-    use std::fs;
     
+    let x = std::fs::read_to_string("config.yaml")?;
 
-    let x = std::fs::read_to_string("test.yaml")?;
-
-    println!("Cfg:{}",x);
+    //println!("Cfg:{}",x);
 
     let s = YamlLoader::load_from_str(&x).unwrap();
     
