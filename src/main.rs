@@ -1,4 +1,6 @@
 
+extern crate yaml_rust;
+
 use 
 {
     std::io::Cursor,
@@ -10,6 +12,7 @@ use
     tokio::net::TcpListener,
     tokio::net::TcpStream,
     tokio::io::{AsyncReadExt, AsyncWriteExt},
+    std::collections::HashMap,
 };
 
 struct RecordOutput<'a>
@@ -22,7 +25,8 @@ struct RecordOutput<'a>
 #[tokio::main]
 pub async fn main() 
 {
-    let listener = TcpListener::bind("[::]:443").await.unwrap();
+    let (hosts_map,bind_addr) = handle_config().unwrap();
+    let listener = TcpListener::bind(bind_addr).await.unwrap();
 
     loop
     {
@@ -34,7 +38,7 @@ pub async fn main()
                 println!("new client!");
                 let mut is_data = true;
                 
-                let n = handle_record_packet(stream.0).await;
+                let n = handle_record_packet(&hosts_map,stream.0).await;
 
                 match n
                 {
@@ -47,7 +51,7 @@ pub async fn main()
     }
 }
 
-async fn handle_record_packet(mut stream: tokio::net::TcpStream) -> Result<usize,tokio::io::Error>
+async fn handle_record_packet(hosts_map: &HashMap<String,String>, mut stream: tokio::net::TcpStream) -> Result<usize,tokio::io::Error>
 {
     use byteorder::WriteBytesExt;
     let mut buffer = [0;5];
@@ -83,48 +87,69 @@ async fn handle_record_packet(mut stream: tokio::net::TcpStream) -> Result<usize
 
     if !record_output.dns_hostname.is_empty()
     {
-        let mut dns_hostname:String = String::from("geekylou.me.uk:443");
-        //record_output.dns_hostname.clone() + ":443";
+        println!("Looking for {}",record_output.dns_hostname);
+        if let Some(dns_hostname) = hosts_map.get(record_output.dns_hostname)
+        {
+            let dns_hostname = dns_hostname.clone();
 
-        let mut outbound_connection = Box::new(TcpStream::connect(dns_hostname).await.unwrap());
-        let mut stream_boxed = Box::new(stream);
 
-        let mut v:Vec<u8> = Vec::new();
-        let mut writer = Cursor::new(&mut v);
+            //let mut dns_hostname:String = String::from("google.co.uk:443");
+            //record_output.dns_hostname.clone() + ":443";
+            println!("Connecting to:{}",dns_hostname.clone() + ":443");
+            let mut outbound_connection = Box::new(TcpStream::connect(dns_hostname + ":443").await.unwrap());
+            let stream_boxed = Box::new(stream);
 
-        WriteBytesExt::write_u8(&mut writer,record_output.content_type)?;
-        WriteBytesExt::write_u16::<BigEndian>(&mut writer,record_output.protocol_version)?;
-        WriteBytesExt::write_u16::<BigEndian>(&mut writer,buffer.len() as u16)?;
+            let mut v:Vec<u8> = Vec::new();
+            let mut writer = Cursor::new(&mut v);
 
-        outbound_connection.write(&v).await?;
-        outbound_connection.write(&buffer).await?;
+            WriteBytesExt::write_u8(&mut writer,record_output.content_type)?;
+            WriteBytesExt::write_u16::<BigEndian>(&mut writer,record_output.protocol_version)?;
+            WriteBytesExt::write_u16::<BigEndian>(&mut writer,buffer.len() as u16)?;
 
-        let (mut outbound_rd, mut outbound_wr) = tokio::io::split(outbound_connection);
-        let (mut stream_rd, mut stream_wr) = tokio::io::split(stream_boxed);
+            outbound_connection.write(&v).await?;
+            outbound_connection.write(&buffer).await?;
 
-        tokio::spawn(async move {
-            forward(&mut outbound_rd,&mut stream_wr).await;
+            let (mut outbound_rd, mut outbound_wr) = tokio::io::split(outbound_connection);
+            let (mut stream_rd, mut stream_wr) = tokio::io::split(stream_boxed);
 
-        });
-        forward(&mut stream_rd,&mut outbound_wr).await;
+            tokio::spawn(async move {
+                if let Err(e) = forward(&mut outbound_rd,&mut stream_wr).await
+                {
+                    println!("Error:Connection dropped - {}",e);
+                }
+
+            });
+            tokio::spawn(async move {
+                if let Err(e) = forward(&mut stream_rd,&mut outbound_wr).await
+                {
+                    println!("Error:Connection dropped - {}",e);
+                }
+            });
+        }
     }
-    
-    
+      
     return Ok(n);
 }
 
+async fn handle_outbound_connection()
+{
+
+    
+}
 async fn forward(stream_in:&mut tokio::io::ReadHalf<Box<TcpStream>>,stream_out:&mut tokio::io::WriteHalf<Box<TcpStream>>) -> Result<(),std::io::Error>
 {
     loop
     {
         let mut buffer_in_client = [0;5];
 
-        let n = stream_in.read(&mut buffer_in_client).await?;
+        stream_in.read_exact(&mut buffer_in_client).await?;
 
         let mut rdr = Cursor::new(buffer_in_client);
         
-        print!("rt {:x?} ",ReadBytesExt::read_u8(&mut rdr)?); // Skip record type.
-        print!("pt {:x?} ",ReadBytesExt::read_u16::<BigEndian>(&mut rdr)?); // Skip protocol version.
+        let x = ReadBytesExt::read_u8(&mut rdr)?; // Skip record type.
+        let y = ReadBytesExt::read_u16::<BigEndian>(&mut rdr)?; // Skip protocol version.
+        //print!("rt {:x?} ",x); // Skip record type.
+        //print!("pt {:x?} ",y); // Skip protocol version.
         
         let buffer_in_client_payload_length = ReadBytesExt::read_u16::<BigEndian>(&mut rdr)?;
         let mut buffer_in_client_payload = vec![0u8;buffer_in_client_payload_length as usize];
@@ -134,7 +159,7 @@ async fn forward(stream_in:&mut tokio::io::ReadHalf<Box<TcpStream>>,stream_out:&
         stream_out.write(&buffer_in_client).await?;
         stream_out.write(&buffer_in_client_payload).await?;
 
-        println!("read {}",buffer_in_client_payload_length);
+        //println!("read {}",buffer_in_client_payload_length);
     }
 }
 
@@ -171,18 +196,18 @@ fn handle_client_hello(record_output :&mut RecordOutput,buffer: &[u8])
         std::io::Read::read(&mut rdr,&mut legacy_compression).unwrap();
     }
 
-    println!("protocol version: {:x?} session_id_length:{} cipher_suit_lengh:{} legacy_compression_length:{}",protocol_version,legacy_session_id_length,cipher_suite_length,legacy_compression_length);
+    //println!("protocol version: {:x?} session_id_length:{} cipher_suit_lengh:{} legacy_compression_length:{}",protocol_version,legacy_session_id_length,cipher_suite_length,legacy_compression_length);
 
     let extensions_length = ReadBytesExt::read_u16::<BigEndian>(&mut rdr).unwrap();
     if extensions_length > 0
     {
         while rdr.position() != buffer.len() as u64
         {   
-            println!("position {} ",rdr.position());
+            //println!("position {} ",rdr.position());
             let extension_type = ReadBytesExt::read_u16::<BigEndian>(&mut rdr).unwrap();
             let extension_type_length = ReadBytesExt::read_u16::<BigEndian>(&mut rdr).unwrap();
 
-            println!("Extension: {:x?} length {}",extension_type,extension_type_length);
+            //println!("Extension: {:x?} length {}",extension_type,extension_type_length);
 
             if extension_type_length>0
             {
@@ -205,13 +230,46 @@ fn handle_client_hello(record_output :&mut RecordOutput,buffer: &[u8])
                         std::io::Read::read(&mut rdr,&mut dns_hostname).unwrap();
 
                         let hostname_str = String::from_utf8(dns_hostname).unwrap();
-                        println!("SNI hostname found: {}",hostname_str);
+                        //println!("SNI hostname found: {}",hostname_str);
                         record_output.dns_hostname.push_str(&hostname_str);
                     }
                 }
-                println!("{:?}", extension.hex_dump());
+                //println!("{:?}", extension.hex_dump());
             }
         }
     }
 }
 
+fn handle_config() -> Result<(HashMap<String,String>,String),std::io::Error>
+{
+    use yaml_rust::YamlLoader;
+    use std::fs;
+    
+
+    let x = std::fs::read_to_string("test.yaml")?;
+
+    println!("Cfg:{}",x);
+
+    let s = YamlLoader::load_from_str(&x).unwrap();
+    
+    let doc = &s[0];
+
+    let bind_addr=doc["host"].as_str().unwrap();
+
+    let hosts = doc["hosts"].as_hash().unwrap();
+    
+    let mut hosts_map = HashMap::new();
+
+    for (key, val) in hosts.iter()
+    {
+        if let Some(host) = key.as_str()
+        {
+            if let Some(addr) = val.as_str()
+            {
+                hosts_map.insert(host.to_string(),addr.to_string());
+                println!("Host entry: {}->{}",host,addr);
+            }
+        }
+    }
+    return Ok((hosts_map,bind_addr.to_string()));
+}
