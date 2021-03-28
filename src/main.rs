@@ -13,6 +13,7 @@ use
     tokio::net::TcpStream,
     tokio::io::{AsyncReadExt, AsyncWriteExt},
     std::collections::HashMap,
+    std::sync::Arc,
 };
 
 struct RecordOutput<'a>
@@ -28,6 +29,7 @@ pub async fn main()
     let (hosts_map,bind_addr) = handle_config().unwrap();
     let listener = TcpListener::bind(bind_addr).await.unwrap();
 
+    let hosts_map_arc = Arc::new(hosts_map );
     loop
     {
         let stream = listener.accept().await;
@@ -37,21 +39,26 @@ pub async fn main()
                 //let mut stream = stream;
                 println!("new client!");
                 let mut is_data = true;
-                
-                let n = handle_record_packet(&hosts_map,stream.0).await;
 
-                match n
-                {
-                    Ok(_) => {},
-                    Err(e) => println!("Connection lost {}",e),
-                }
+                let y= hosts_map_arc.clone();                
+                tokio::spawn(async move {
+
+
+                    let n = handle_record_packet(y,stream.0).await;
+                    
+                    match n
+                    {
+                        Ok(_) => {},
+                        Err(e) => println!("Connection lost {}",e),
+                    }
+                });
             }
             Err(e) => { /* connection failed */ }
         }
-    }
+    }   
 }
 
-async fn handle_record_packet(hosts_map: &HashMap<String,String>, mut stream: tokio::net::TcpStream) -> Result<usize,tokio::io::Error>
+async fn handle_record_packet(hosts_map: Arc<HashMap<String,String>>, mut stream: tokio::net::TcpStream) -> Result<usize,tokio::io::Error>
 {
     use byteorder::WriteBytesExt;
     let mut buffer = [0;5];
@@ -71,14 +78,14 @@ async fn handle_record_packet(hosts_map: &HashMap<String,String>, mut stream: to
     let mut buffer = vec![0u8;packet_length as usize];
     let n = stream.read(&mut buffer).await?;
 
-    println!("done read {}",n);
+    //println!("done read {}",n);
 
     let mut rdr = Cursor::new(&buffer);
     let content_type = ReadBytesExt::read_u8(&mut rdr)?;
 
-    let length = ReadBytesExt::read_u24::<BigEndian>(&mut rdr)?;
+    let _length = ReadBytesExt::read_u24::<BigEndian>(&mut rdr)?;
 
-    println!("record: type:{} length:{}",content_type,length);
+    //println!("record: type:{} length:{}",content_type,length);
     
     match content_type {
         1 => handle_client_hello(&mut record_output,&buffer[4..]),
@@ -92,9 +99,6 @@ async fn handle_record_packet(hosts_map: &HashMap<String,String>, mut stream: to
         {
             let dns_hostname = dns_hostname.clone();
 
-
-            //let mut dns_hostname:String = String::from("google.co.uk:443");
-            //record_output.dns_hostname.clone() + ":443";
             println!("Connecting to:{}",dns_hostname.clone() + ":443");
             let mut outbound_connection = Box::new(TcpStream::connect(dns_hostname + ":443").await.unwrap());
             let stream_boxed = Box::new(stream);
@@ -131,11 +135,6 @@ async fn handle_record_packet(hosts_map: &HashMap<String,String>, mut stream: to
     return Ok(n);
 }
 
-async fn handle_outbound_connection()
-{
-
-    
-}
 async fn forward(stream_in:&mut tokio::io::ReadHalf<Box<TcpStream>>,stream_out:&mut tokio::io::WriteHalf<Box<TcpStream>>) -> Result<(),std::io::Error>
 {
     loop
@@ -267,7 +266,7 @@ fn handle_config() -> Result<(HashMap<String,String>,String),std::io::Error>
             if let Some(addr) = val.as_str()
             {
                 hosts_map.insert(host.to_string(),addr.to_string());
-                println!("Host entry: {}->{}",host,addr);
+                println!("--Host entry: {}->{}",host,addr);
             }
         }
     }
