@@ -23,7 +23,20 @@ struct RecordOutput<'a>
 #[tokio::main]
 pub async fn main() 
 {
-    let (hosts_map,bind_addr) = handle_config().unwrap();
+    let mut config_filename = String::from("config.yaml");
+    let mut y=String::from("");
+    
+    for arg in std::env::args()
+    {
+        match y 
+        {
+            _ if y == "-f" => {config_filename = arg;y=String::from("");},
+            _ => y = arg,
+            
+        }
+    }
+
+    let (hosts_map,bind_addr) = handle_config(String::from(config_filename)).unwrap();
     let listener = TcpListener::bind(bind_addr).await.unwrap();
 
     let hosts_map_arc = Arc::new(hosts_map );
@@ -231,13 +244,16 @@ fn handle_client_hello(record_output :&mut RecordOutput,buffer: &[u8])
     }
 }
 
-fn handle_config() -> Result<(HashMap<String,String>,String),std::io::Error>
+fn handle_config(filename: String) -> Result<(HashMap<String,String>,String),std::io::Error>
 {
     use yaml_rust::YamlLoader;
     
-    let x = std::fs::read_to_string("config.yaml")?;
-
-    //println!("Cfg:{}",x);
+    let x = std::fs::read_to_string(&filename);
+    if let Err(e) = &x
+    {
+        println!("Error: Could not open config {} - {}",filename,e);
+    }
+    let x = x.unwrap();
 
     let s = YamlLoader::load_from_str(&x).unwrap();
     
